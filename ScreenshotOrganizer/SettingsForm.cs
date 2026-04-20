@@ -5,54 +5,57 @@ public class SettingsForm : Form
     private readonly AppSettings _settings;
     private TextBox _folderBox = null!;
     private CheckBox _autoRunCheck = null!;
+    private Label _taskStatusLabel = null!;
 
     public SettingsForm(AppSettings settings)
     {
         _settings = settings;
         InitializeComponents();
         LoadValues();
+        RefreshTaskStatus();
     }
 
     private void InitializeComponents()
     {
         Text = "Einstellungen";
-        Size = new Size(520, 220);
-        MinimumSize = new Size(440, 220);
-        MaximumSize = new Size(800, 220);
+        Size = new Size(540, 260);
+        MinimumSize = new Size(460, 260);
+        MaximumSize = new Size(800, 260);
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
 
         // --- Folder row ---
-        var folderLabel = new Label
-        {
-            Text = "Screenshot-Ordner:",
-            AutoSize = true,
-            Location = new Point(16, 20)
-        };
+        var folderLabel = new Label { Text = "Screenshot-Ordner:", AutoSize = true, Location = new Point(16, 20) };
 
         _folderBox = new TextBox
         {
             Location = new Point(16, 42),
-            Size = new Size(380, 24),
+            Size = new Size(390, 24),
             Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top
         };
 
-        var browseBtn = new Button
-        {
-            Text = "...",
-            Location = new Point(404, 41),
-            Size = new Size(80, 26)
-        };
+        var browseBtn = new Button { Text = "...", Location = new Point(414, 41), Size = new Size(80, 26) };
         browseBtn.Click += BrowseBtn_Click;
 
         // --- Auto-run checkbox ---
         _autoRunCheck = new CheckBox
         {
-            Text = "Alle 2 Stunden automatisch ausführen",
+            Text = "Alle 2 Stunden via Task Scheduler ausführen (App muss nicht offen sein)",
             AutoSize = true,
             Location = new Point(16, 84)
+        };
+        _autoRunCheck.CheckedChanged += (_, _) => _taskStatusLabel.Visible = false;
+
+        // --- Task status hint ---
+        _taskStatusLabel = new Label
+        {
+            AutoSize = true,
+            Location = new Point(34, 108),
+            ForeColor = Color.Gray,
+            Font = new Font(Font.FontFamily, 8f),
+            Visible = false
         };
 
         // --- OK / Cancel ---
@@ -61,7 +64,7 @@ public class SettingsForm : Form
             Text = "OK",
             DialogResult = DialogResult.OK,
             Size = new Size(88, 30),
-            Location = new Point(316, 136)
+            Location = new Point(330, 192)
         };
         okBtn.Click += OkBtn_Click;
 
@@ -70,7 +73,7 @@ public class SettingsForm : Form
             Text = "Abbrechen",
             DialogResult = DialogResult.Cancel,
             Size = new Size(88, 30),
-            Location = new Point(412, 136)
+            Location = new Point(426, 192)
         };
 
         AcceptButton = okBtn;
@@ -78,7 +81,9 @@ public class SettingsForm : Form
 
         Controls.AddRange(new Control[]
         {
-            folderLabel, _folderBox, browseBtn, _autoRunCheck, okBtn, cancelBtn
+            folderLabel, _folderBox, browseBtn,
+            _autoRunCheck, _taskStatusLabel,
+            okBtn, cancelBtn
         });
     }
 
@@ -86,6 +91,16 @@ public class SettingsForm : Form
     {
         _folderBox.Text = _settings.ScreenshotFolder;
         _autoRunCheck.Checked = _settings.RunEvery2Hours;
+    }
+
+    private void RefreshTaskStatus()
+    {
+        var registered = TaskSchedulerHelper.IsRegistered();
+        _taskStatusLabel.Text = registered
+            ? "Task Scheduler-Eintrag vorhanden."
+            : "Kein Task Scheduler-Eintrag vorhanden.";
+        _taskStatusLabel.ForeColor = registered ? Color.Green : Color.Gray;
+        _taskStatusLabel.Visible = true;
     }
 
     private void BrowseBtn_Click(object? sender, EventArgs e)
@@ -110,7 +125,29 @@ public class SettingsForm : Form
         }
 
         _settings.ScreenshotFolder = _folderBox.Text.Trim();
+        var wasEnabled = _settings.RunEvery2Hours;
         _settings.RunEvery2Hours = _autoRunCheck.Checked;
         _settings.Save();
+
+        // Register or remove Task Scheduler entry if the setting changed
+        if (_settings.RunEvery2Hours && !wasEnabled)
+        {
+            var (ok, msg) = TaskSchedulerHelper.Register();
+            if (!ok)
+            {
+                MessageBox.Show(
+                    $"Task Scheduler-Eintrag konnte nicht erstellt werden:\n{msg}\n\n" +
+                    "Tipp: Starte die App einmalig als Administrator.",
+                    "Task Scheduler", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _settings.RunEvery2Hours = false;
+                _settings.Save();
+                DialogResult = DialogResult.None;
+                return;
+            }
+        }
+        else if (!_settings.RunEvery2Hours && wasEnabled)
+        {
+            TaskSchedulerHelper.Unregister();
+        }
     }
 }

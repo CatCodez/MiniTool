@@ -3,10 +3,10 @@ namespace ScreenshotOrganizer;
 public class MainForm : Form
 {
     private AppSettings _settings;
-    private System.Windows.Forms.Timer _autoTimer = null!;
     private NotifyIcon _trayIcon = null!;
 
     private Label _folderValueLabel = null!;
+    private Label _taskStatusLabel = null!;
     private Button _organizeBtn = null!;
     private Button _settingsBtn = null!;
     private RichTextBox _logBox = null!;
@@ -19,12 +19,8 @@ public class MainForm : Form
         _settings = AppSettings.Load();
         InitializeComponents();
         InitializeTray();
-        InitializeTimer();
-        UpdateFolderLabel();
-
-        // Run immediately on startup if overdue
-        if (_settings.RunEvery2Hours && IsOverdue())
-            RunOrganizer();
+        RefreshStatus();
+        LoadFileLog();
     }
 
     // -------------------------------------------------------------------------
@@ -34,12 +30,13 @@ public class MainForm : Form
     private void InitializeComponents()
     {
         Text = "Screenshot Organizer";
-        Size = new Size(660, 520);
-        MinimumSize = new Size(500, 400);
+        Size = new Size(660, 540);
+        MinimumSize = new Size(500, 420);
         StartPosition = FormStartPosition.CenterScreen;
 
-        // --- Top panel: folder info ---
-        var topPanel = new Panel { Dock = DockStyle.Top, Height = 56, Padding = new Padding(12, 8, 12, 4) };
+        // --- Top info panel ---
+        var topPanel = new Panel { Dock = DockStyle.Top, Height = 76, Padding = new Padding(12, 8, 12, 4) };
+
         var folderCaption = new Label
         {
             Text = "Überwachter Ordner:",
@@ -55,8 +52,13 @@ public class MainForm : Form
             ForeColor = Color.FromArgb(80, 80, 80),
             Font = new Font("Consolas", 8.5f)
         };
-        topPanel.Controls.Add(folderCaption);
-        topPanel.Controls.Add(_folderValueLabel);
+        _taskStatusLabel = new Label
+        {
+            AutoSize = true,
+            Location = new Point(12, 52),
+            Font = new Font(Font.FontFamily, 8f)
+        };
+        topPanel.Controls.AddRange(new Control[] { folderCaption, _folderValueLabel, _taskStatusLabel });
 
         // --- Button panel ---
         var btnPanel = new Panel { Dock = DockStyle.Top, Height = 48, Padding = new Padding(12, 8, 12, 0) };
@@ -122,9 +124,6 @@ public class MainForm : Form
 
         FormClosing += MainForm_FormClosing;
         Resize += MainForm_Resize;
-
-        AppendLog("Screenshot Organizer gestartet.", Color.FromArgb(100, 200, 100));
-        AppendLog($"Ordner: {_settings.ScreenshotFolder}", Color.FromArgb(180, 180, 180));
     }
 
     // -------------------------------------------------------------------------
@@ -169,7 +168,7 @@ public class MainForm : Form
             e.Cancel = true;
             Hide();
             _trayIcon.ShowBalloonTip(2000, "Screenshot Organizer",
-                "Läuft im Hintergrund weiter.", ToolTipIcon.Info);
+                "Fenster geschlossen. Task Scheduler läuft weiter (falls aktiv).", ToolTipIcon.Info);
         }
     }
 
@@ -178,29 +177,6 @@ public class MainForm : Form
         _closingToTray = false;
         _trayIcon.Visible = false;
         Application.Exit();
-    }
-
-    // -------------------------------------------------------------------------
-    // Timer
-    // -------------------------------------------------------------------------
-
-    private void InitializeTimer()
-    {
-        _autoTimer = new System.Windows.Forms.Timer { Interval = 2 * 60 * 60 * 1000 }; // 2 hours
-        _autoTimer.Tick += AutoTimer_Tick;
-        _autoTimer.Enabled = _settings.RunEvery2Hours;
-    }
-
-    private void AutoTimer_Tick(object? sender, EventArgs e)
-    {
-        AppendLog("Automatische Ausführung (Timer)...", Color.FromArgb(100, 180, 255));
-        RunOrganizer();
-    }
-
-    private bool IsOverdue()
-    {
-        if (_settings.LastRun is null) return true;
-        return (DateTime.Now - _settings.LastRun.Value).TotalHours >= 2;
     }
 
     // -------------------------------------------------------------------------
@@ -214,8 +190,7 @@ public class MainForm : Form
 
         try
         {
-            var service = new OrganizerService(_settings.ScreenshotFolder);
-            var result = service.Organize();
+            var result = new OrganizerService(_settings.ScreenshotFolder).Organize();
 
             if (result.TotalMoved == 0 && result.Errors.Count == 0)
             {
@@ -223,12 +198,10 @@ public class MainForm : Form
             }
             else
             {
-                foreach (var moved in result.MovedFiles)
-                    AppendLog("  ✓ " + moved, Color.FromArgb(100, 220, 100));
-
+                foreach (var m in result.MovedFiles)
+                    AppendLog("  ✓ " + m, Color.FromArgb(100, 220, 100));
                 foreach (var err in result.Errors)
                     AppendLog("  ✗ " + err, Color.FromArgb(220, 80, 80));
-
                 AppendLog($"Fertig: {result.TotalMoved} Datei(en) verschoben, {result.Errors.Count} Fehler.",
                     Color.FromArgb(220, 220, 220));
             }
@@ -260,9 +233,8 @@ public class MainForm : Form
         if (dlg.ShowDialog(this) == DialogResult.OK)
         {
             _settings = AppSettings.Load();
-            _autoTimer.Enabled = _settings.RunEvery2Hours;
-            UpdateFolderLabel();
-            AppendLog($"Einstellungen gespeichert. Auto-Run: {(_settings.RunEvery2Hours ? "AN" : "AUS")}",
+            RefreshStatus();
+            AppendLog($"Einstellungen gespeichert. Task Scheduler: {(_settings.RunEvery2Hours ? "AN" : "AUS")}",
                 Color.FromArgb(180, 180, 255));
         }
     }
@@ -271,25 +243,66 @@ public class MainForm : Form
     // Helpers
     // -------------------------------------------------------------------------
 
-    private void UpdateFolderLabel()
+    private void RefreshStatus()
     {
         _folderValueLabel.Text = _settings.ScreenshotFolder;
-        if (_settings.LastRun.HasValue)
-            _statusLabel.Text = $"Zuletzt ausgeführt: {_settings.LastRun:dd.MM.yyyy HH:mm}";
+
+        var taskRegistered = TaskSchedulerHelper.IsRegistered();
+        if (_settings.RunEvery2Hours && taskRegistered)
+        {
+            _taskStatusLabel.Text = "Task Scheduler: aktiv — alle 2 Stunden";
+            _taskStatusLabel.ForeColor = Color.FromArgb(40, 160, 40);
+        }
+        else if (_settings.RunEvery2Hours && !taskRegistered)
+        {
+            _taskStatusLabel.Text = "Task Scheduler: Einstellung aktiv, aber kein Task gefunden — bitte Einstellungen erneut öffnen";
+            _taskStatusLabel.ForeColor = Color.OrangeRed;
+        }
+        else
+        {
+            _taskStatusLabel.Text = "Task Scheduler: inaktiv";
+            _taskStatusLabel.ForeColor = Color.FromArgb(120, 120, 120);
+        }
+
+        _statusLabel.Text = _settings.LastRun.HasValue
+            ? $"Zuletzt ausgeführt: {_settings.LastRun:dd.MM.yyyy HH:mm}"
+            : "Noch nie ausgeführt";
+    }
+
+    // Load past auto-run entries from the log file written by --run mode
+    private void LoadFileLog()
+    {
+        var lines = AppFileLogger.ReadRecentLines();
+        if (lines.Length == 0)
+        {
+            AppendLog("Screenshot Organizer gestartet.", Color.FromArgb(100, 200, 100));
+            return;
+        }
+
+        AppendLog("--- Bisherige Auto-Run-Einträge (aus Logdatei) ---", Color.FromArgb(100, 100, 160));
+        foreach (var line in lines)
+        {
+            var color = line.StartsWith("  +") ? Color.FromArgb(100, 220, 100)
+                      : line.StartsWith("  !") ? Color.FromArgb(220, 80, 80)
+                      : line.StartsWith("[")   ? Color.FromArgb(180, 180, 255)
+                      : Color.FromArgb(160, 160, 160);
+            _logBox.SelectionStart = _logBox.TextLength;
+            _logBox.SelectionColor = color;
+            _logBox.AppendText(line + "\n");
+        }
+        AppendLog("--- Ende Logdatei ---", Color.FromArgb(100, 100, 160));
+        AppendLog("Screenshot Organizer gestartet.", Color.FromArgb(100, 200, 100));
     }
 
     private void AppendLog(string message, Color color)
     {
-        var timestamp = DateTime.Now.ToString("HH:mm:ss");
+        var ts = DateTime.Now.ToString("HH:mm:ss");
         _logBox.SelectionStart = _logBox.TextLength;
         _logBox.SelectionLength = 0;
-
         _logBox.SelectionColor = Color.FromArgb(120, 120, 120);
-        _logBox.AppendText($"[{timestamp}] ");
-
+        _logBox.AppendText($"[{ts}] ");
         _logBox.SelectionColor = color;
         _logBox.AppendText(message + "\n");
-
         _logBox.ScrollToCaret();
     }
 }
