@@ -6,15 +6,8 @@
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <ApplicationIcon>app.ico</ApplicationIcon>
     <AssemblyTitle>Screenshot Organizer</AssemblyTitle>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
   </PropertyGroup>
-
-  <ItemGroup>
-    <None Update="app.ico">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-  </ItemGroup>
 
 </Project>

@@ -4,6 +4,7 @@ public class MainForm : Form
 {
     private AppSettings _settings;
     private NotifyIcon _trayIcon = null!;
+    private Icon _trayIconImage = null!;
 
     private Label _folderValueLabel = null!;
     private Label _taskStatusLabel = null!;
@@ -132,6 +133,8 @@ public class MainForm : Form
 
     private void InitializeTray()
     {
+        _trayIconImage = CreateTrayIcon();
+
         var menu = new ContextMenuStrip();
         menu.Items.Add("Öffnen", null, (_, _) => ShowWindow());
         menu.Items.Add("Jetzt organisieren", null, (_, _) => RunOrganizer());
@@ -141,11 +144,47 @@ public class MainForm : Form
         _trayIcon = new NotifyIcon
         {
             Text = "Screenshot Organizer",
-            Icon = SystemIcons.Application,
+            Icon = _trayIconImage,
             ContextMenuStrip = menu,
             Visible = true
         };
         _trayIcon.DoubleClick += (_, _) => ShowWindow();
+
+        // Also set the form icon so the taskbar entry is consistent
+        Icon = _trayIconImage;
+    }
+
+    // Creates a simple owned 32×32 icon; caller is responsible for disposal.
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool DestroyIcon(IntPtr hIcon);
+
+    private static Icon CreateTrayIcon()
+    {
+        using var bmp = new Bitmap(32, 32, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.Transparent);
+            using var bg = new SolidBrush(Color.FromArgb(0, 102, 204));
+            g.FillRectangle(bg, 2, 2, 28, 28);
+            using var font = new Font("Arial", 16f, FontStyle.Bold, GraphicsUnit.Pixel);
+            var sf = new StringFormat
+            {
+                Alignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Center
+            };
+            g.DrawString("S", font, Brushes.White, new RectangleF(0, 0, 32, 32), sf);
+        }
+
+        IntPtr hIcon = bmp.GetHicon();
+        try
+        {
+            // Clone into a fully owned Icon so the GDI handle can be freed immediately
+            return (Icon)Icon.FromHandle(hIcon).Clone();
+        }
+        finally
+        {
+            DestroyIcon(hIcon);
+        }
     }
 
     private void ShowWindow()
@@ -176,7 +215,18 @@ public class MainForm : Form
     {
         _closingToTray = false;
         _trayIcon.Visible = false;
+        _trayIcon.Dispose();
         Application.Exit();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _trayIcon?.Dispose();
+            _trayIconImage?.Dispose();
+        }
+        base.Dispose(disposing);
     }
 
     // -------------------------------------------------------------------------
